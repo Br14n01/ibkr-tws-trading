@@ -29,11 +29,12 @@ public class IBKRClient {
     @PostConstruct
     public void start() {
         if (!client.isConnected()) {
-            client.eConnect("127.0.0.1", 7497, 1);
+            client.eConnect("127.0.0.1", 7497, 2);
             if (client.isConnected()) {
                 System.out.println("Connected to IBKR Gateway.");
                 setConnected(true); // Set our flag to true
                 startReaderThread();
+                subscribeToPortfolioData();
             }
         }
     }
@@ -55,9 +56,25 @@ public class IBKRClient {
         });
     }
 
+    public void disconnect() {
+        if (client != null && client.isConnected()) {
+            client.eDisconnect();
+            System.out.println("[IBKR] Disconnected successfully.");
+        }
+    }
+
     public EClientSocket getClient() { return client; }
 
     // We'll use this to keep track of the next valid order ID from TWS
     public void setNextOrderId(int id) { this.currentOrderId = id; }
     public int getNextOrderId() { return currentOrderId++; }
+
+    public void subscribeToPortfolioData() {
+        // 1. Get high-level account metrics
+        String tags = "AccountType,NetLiquidation,TotalCashValue,SettledCash,BuyingPower,EquityWithLoanValue,GrossPositionValue,ExcessLiquidity,Leverage";
+        client.reqAccountSummary(9001, "All", tags);
+
+        // 2. Get specific asset positions
+        client.reqAccountUpdates(true, "");
+    }
 }

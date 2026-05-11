@@ -1,5 +1,9 @@
 package com.trading.paper_trade.integration.ibkr;
 
+import com.trading.paper_trade.model.AccountSummary;
+import com.trading.paper_trade.model.Position;
+import com.trading.paper_trade.portfolio.PortfolioService;
+
 import com.ib.client.*;
 import com.ib.client.protobuf.*;
 
@@ -21,11 +25,17 @@ public class IBKRListener implements EWrapper {
     private final Terminal terminal;
     private final LineReader lineReader;
 
+    private final PortfolioService portfolioService;
 
-    public IBKRListener(@Lazy IBKRClient ibkrClient, @Lazy Terminal terminal, @Lazy LineReader lineReader){
+
+    public IBKRListener(@Lazy IBKRClient ibkrClient,
+                        @Lazy Terminal terminal,
+                        @Lazy LineReader lineReader,
+                        PortfolioService portfolioService){
         this.ibkrClient = ibkrClient;
         this.terminal = terminal;
         this.lineReader = lineReader;
+        this.portfolioService = portfolioService;
     }
 
     public EReaderSignal getSignal() {
@@ -94,8 +104,17 @@ public class IBKRListener implements EWrapper {
     }
 
     @Override
-    public void updatePortfolio(Contract contract, Decimal decimal, double v, double v1, double v2, double v3, double v4, String s) {
-
+    public void updatePortfolio(Contract contract, Decimal position, double marketPrice,
+                                double marketValue, double averageCost, double unrealizedPNL,
+                                double realizedPNL, String accountName) {
+        Position pos = new Position();
+        pos.setSymbol(contract.symbol());
+        pos.setSecType(contract.getSecType());
+        pos.setQuantity(position.value().doubleValue());
+        pos.setMarketPrice(marketPrice);
+        pos.setAverageCost(averageCost);
+        pos.setUnrealizedPNL(unrealizedPNL);
+        portfolioService.updatePosition(pos);
     }
 
     @Override
@@ -224,8 +243,8 @@ public class IBKRListener implements EWrapper {
     }
 
     @Override
-    public void accountSummary(int i, String s, String s1, String s2, String s3) {
-
+    public void accountSummary(int reqId, String account, String tag, String value, String currency) {
+        portfolioService.updateAccountSummary(account, tag, value);
     }
 
     @Override
