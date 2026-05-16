@@ -4,10 +4,13 @@ import com.trading.paper_trade.integration.ibkr.IBKRClient;
 import com.trading.paper_trade.model.Position;
 import com.trading.paper_trade.model.AccountSummary;
 import com.trading.paper_trade.portfolio.PortfolioService;
+import com.trading.paper_trade.market.MarketData;
+import com.trading.paper_trade.market.HistoryService;
 
 import com.ib.client.Contract;
 import com.ib.client.Order;
 import com.ib.client.Decimal;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.shell.standard.ShellComponent;
 import org.springframework.shell.standard.ShellMethod;
@@ -23,47 +26,19 @@ public class TradingShell {
     private final IBKRClient ibkrClient;
     private final Terminal terminal;
     private final PortfolioService portfolioService;
+    private final MarketData marketDataService;
+    private final HistoryService historyService;
 
     public TradingShell(Terminal terminal,
                         PortfolioService portfolioService,
-                        IBKRClient ibkrClient) {
+                        @Lazy IBKRClient ibkrClient,
+                        MarketData marketDataService,
+                        HistoryService historyService) {
         this.terminal = terminal;
         this.portfolioService = portfolioService;
         this.ibkrClient = ibkrClient;
-    }
-
-    @ShellMethod(key = "buy", value = "Place a buy order: buy --symbol AAPL --qty 10 --price 150.0")
-    public String buy(
-            String symbol,
-            int qty,
-            @ShellOption(defaultValue = ShellOption.NULL) Double price) {
-
-        if (!ibkrClient.getClient().isConnected()) {
-            return "Error: TWS is not connected!";
-        }
-
-        // --- Reuse your logic from the Controller ---
-        Contract contract = new Contract();
-        contract.symbol(symbol.toUpperCase());
-        contract.secType("STK");
-        contract.currency("USD");
-        contract.exchange("SMART");
-
-        Order order = new Order();
-        order.action("BUY");
-        order.totalQuantity(Decimal.get(qty));
-
-        if (price != null) {
-            order.orderType("LMT");
-            order.lmtPrice(price);
-        } else {
-            order.orderType("MKT");
-        }
-
-        int id = ibkrClient.getNextOrderId();
-        ibkrClient.getClient().placeOrder(id, contract, order);
-
-        return "Order " + id + " sent: BUY " + qty + " " + symbol + (price != null ? " @ " + price : " (Market)");
+        this.marketDataService = marketDataService;
+        this.historyService = historyService;
     }
 
     @ShellMethod(key = "status", value = "Check connection status")
@@ -72,6 +47,7 @@ public class TradingShell {
         return connected ? "CONNECTED to IBKR" : "DISCONNECTED - use 'connect' to retry";
     }
 
+    // Connection
     @ShellMethod(key = "connect", value = "Manually reconnect to TWS")
     public String reconnect() {
         if (ibkrClient.getClient().isConnected()) return "Already connected.";
@@ -85,6 +61,7 @@ public class TradingShell {
         return "Disconnected from TWS.";
     }
 
+    // Functions
     @ShellMethod(key = "portfolio", value = "View TWS Account Details")
     public void viewPortfolio() {
         AccountSummary summary = portfolioService.getSummary("");
@@ -108,5 +85,69 @@ public class TradingShell {
         }
         terminal.writer().println("====================================\n");
         terminal.flush();
+    }
+
+    @ShellMethod(key = "buy", value = "Place a buy order")
+    public String buy(String symbol, int qty, @ShellOption(defaultValue = ShellOption.NULL) Double price) {
+        return placeOrder(symbol, qty, price, "BUY");
+    }
+
+    @ShellMethod(key = "sell", value = "Place a sell order")
+    public String sell(String symbol, int qty, @ShellOption(defaultValue = ShellOption.NULL) Double price) {
+        return placeOrder(symbol, qty, price, "SELL");
+    }
+
+    private String placeOrder(String symbol, int qty, Double price, String action) {
+        if (!ibkrClient.getClient().isConnected()) {
+            return "Error: TWS is not connected!";
+        }
+
+        Contract contract = new Contract();
+        contract.symbol(symbol.toUpperCase());
+        contract.secType("STK");
+        contract.currency("USD");
+        contract.exchange("SMART");
+
+        Order order = new Order();
+        order.action(action); // Set to "BUY" or "SELL"
+        order.totalQuantity(Decimal.get(qty));
+
+        if (price != null) {
+            order.orderType("LMT");
+            order.lmtPrice(price);
+        } else {
+            order.orderType("MKT");
+        }
+
+        int id = ibkrClient.getNextOrderId();
+        ibkrClient.getClient().placeOrder(id, contract, order);
+
+        String priceType = (price != null ? " @ $" + price : " (Market)");
+        return "Order " + id + " sent: " + action + " " + qty + " " + symbol + priceType;
+    }
+
+    @ShellMethod(key = "watch", value = "Subscribe to delayed market data")
+    public String watch(String symbol) {
+        ibkrClient.watchStock(symbol);
+        return "Requesting data...";
+    }
+
+    @ShellMethod(key = "price", value = "Check current price of a watched stock")
+    public String price(String symbol) {
+        Double p = marketDataService.getPrice(symbol);
+        if (p == 0.0) {
+            return "No data for " + symbol.toUpperCase() + " yet. (Wait for 15-min delayed stream)";
+        }
+        return symbol.toUpperCase() + " Last Price: $" + p;
+    }
+
+    @ShellMethod(key = "historical", value = "Get OHLCV")
+    public String getHistory(String symbol) {
+        if (!ibkrClient.getClient().isConnected()) {
+            return "Error: TWS not connected.";
+        }
+
+        historyService.fetch(symbol);
+        return "Fetching last 5 days of history for " + symbol.toUpperCase() + "...";
     }
 }

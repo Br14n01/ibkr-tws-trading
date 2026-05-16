@@ -1,9 +1,16 @@
 package com.trading.paper_trade.integration.ibkr;
 
+import com.trading.paper_trade.market.MarketData;
+
 import com.ib.client.*;
 import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
 
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
+
+import java.util.concurrent.atomic.AtomicInteger;
 
 @Service
 public class IBKRClient {
@@ -12,6 +19,12 @@ public class IBKRClient {
     private int currentOrderId = -1;
 
     private boolean isConnected = false;
+
+    @Autowired
+    @Lazy
+    private MarketData marketDataService;
+
+    private AtomicInteger nextReqId = new AtomicInteger(1000);
 
     public IBKRClient(IBKRListener listener){
         this.listener = listener;
@@ -24,6 +37,14 @@ public class IBKRClient {
 
     public boolean isCurrentlyConnected() {
         return client.isConnected() && isConnected;
+    }
+
+    @PreDestroy
+    public void shutdown() {
+        if (client != null && client.isConnected()) {
+            System.out.println("Shutting down: Disconnecting from TWS...");
+            client.eDisconnect();
+        }
     }
 
     @PostConstruct
@@ -76,5 +97,28 @@ public class IBKRClient {
 
         // 2. Get specific asset positions
         client.reqAccountUpdates(true, "");
+    }
+
+    public void watchStock(String symbol) {
+        // 1. Create the Contract
+        Contract contract = new Contract();
+        contract.symbol(symbol.toUpperCase());
+        contract.secType("STK");
+        contract.currency("USD");
+        contract.exchange("SMART");
+
+        // 2. Switch to Delayed Data Type (ID = 3)
+        // This is global for the session or until switched back
+        client.reqMarketDataType(3);
+
+        // 3. Generate a unique ID for this specific stock subscription
+        int reqId = nextReqId.getAndIncrement();
+        marketDataService.addSubscription(reqId, symbol);
+
+        // 4. Request the data
+        // genericTicklist "" means we want default ticks (Last, Bid, Ask, Volume)
+        client.reqMktData(reqId, contract, "", false, false, null);
+
+        System.out.println("[IBKR] Subscription sent for " + symbol + " (ID: " + reqId + ")");
     }
 }

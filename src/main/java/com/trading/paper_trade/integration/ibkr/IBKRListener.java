@@ -3,6 +3,8 @@ package com.trading.paper_trade.integration.ibkr;
 import com.trading.paper_trade.model.AccountSummary;
 import com.trading.paper_trade.model.Position;
 import com.trading.paper_trade.portfolio.PortfolioService;
+import com.trading.paper_trade.market.MarketData;
+import com.trading.paper_trade.market.HistoryService;
 
 import com.ib.client.*;
 import com.ib.client.protobuf.*;
@@ -26,16 +28,22 @@ public class IBKRListener implements EWrapper {
     private final LineReader lineReader;
 
     private final PortfolioService portfolioService;
+    private final MarketData marketDataService;
+    private final HistoryService historyService;
 
 
     public IBKRListener(@Lazy IBKRClient ibkrClient,
                         @Lazy Terminal terminal,
                         @Lazy LineReader lineReader,
-                        PortfolioService portfolioService){
+                        PortfolioService portfolioService,
+                        MarketData marketDataService,
+                        @Lazy HistoryService historyService){
         this.ibkrClient = ibkrClient;
         this.terminal = terminal;
         this.lineReader = lineReader;
         this.portfolioService = portfolioService;
+        this.marketDataService = marketDataService;
+        this.historyService = historyService;
     }
 
     public EReaderSignal getSignal() {
@@ -54,8 +62,14 @@ public class IBKRListener implements EWrapper {
     // Use Alt+Insert -> Implement Methods in IntelliJ to fill the rest.
 
     @Override
-    public void tickPrice(int tickerId, int field, double price, TickAttrib tickAttrib) {
-        System.out.println("Price Update for ID " + tickerId + ": " + price);
+    public void tickPrice(int tickerId, int field, double price, TickAttrib attribs) {
+        String symbol = marketDataService.getSymbolById(tickerId);
+        if (symbol == null) return;
+
+        // Field 68 is "Delayed Last", Field 4 is "Live Last"
+        if (field == 68 || field == 4) {
+            marketDataService.updatePrice(symbol, price);
+        }
     }
 
     @Override
@@ -178,8 +192,8 @@ public class IBKRListener implements EWrapper {
     }
 
     @Override
-    public void historicalData(int i, Bar bar) {
-
+    public void historicalData(int reqId, Bar bar) {
+        System.out.println("HistoricalData:  " + EWrapperMsgGenerator.historicalData(reqId, bar.time(), bar.open(), bar.high(), bar.low(), bar.close(), bar.volume(), bar.count(), bar.wap()));
     }
 
     @Override
@@ -223,8 +237,10 @@ public class IBKRListener implements EWrapper {
     }
 
     @Override
-    public void marketDataType(int i, int i1) {
-
+    public void marketDataType(int reqId, int marketDataType) {
+        // This confirms TWS switched to Delayed mode for your request
+        String typeStr = (marketDataType == 3) ? "DELAYED" : (marketDataType ==  1) ? "LIVE" : "OTHER";
+        System.out.println("\r\n[IBKR] Market Data Type for ID " + reqId + ": " + typeStr);
     }
 
     @Override
@@ -366,7 +382,7 @@ public class IBKRListener implements EWrapper {
     }
 
     @Override
-    public void historicalDataEnd(int i, String s, String s1) {
+    public void historicalDataEnd(int reqId, String start, String end) {
 
     }
 
