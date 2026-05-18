@@ -17,35 +17,50 @@ public class TradeController {
         this.ibkrClient = ibkrClient;
     }
 
-    @GetMapping("/trade/buy")
-    public String buyStock(
-            @RequestParam String symbol,
-            @RequestParam int qty,
-            @RequestParam(required = false) Double price // Added price parameter
-    ) {
+    private String placeOrder(String symbol, int qty, Double price, String action) {
+        if (!ibkrClient.getClient().isConnected()) {
+            return "Error: TWS is not connected!";
+        }
+
         Contract contract = new Contract();
-        contract.symbol(symbol);
+        contract.symbol(symbol.toUpperCase());
         contract.secType("STK");
         contract.currency("USD");
         contract.exchange("SMART");
 
         Order order = new Order();
-        order.action("BUY");
+        order.action(action); // Set to "BUY" or "SELL"
         order.totalQuantity(Decimal.get(qty));
 
         if (price != null) {
-            // --- LIMIT ORDER ---
             order.orderType("LMT");
             order.lmtPrice(price);
         } else {
-            // --- MARKET ORDER ---
             order.orderType("MKT");
         }
 
         int id = ibkrClient.getNextOrderId();
         ibkrClient.getClient().placeOrder(id, contract, order);
 
-        String type = (price != null) ? "Limit at $" + price : "Market";
-        return "Successfully sent " + type + " order for " + qty + " shares of " + symbol;
+        String priceType = (price != null ? " @ $" + price : " (Market)");
+        return "Order " + id + " sent: " + action + " " + qty + " " + symbol + priceType;
+    }
+
+    @GetMapping("/trade/buy")
+    public String buyStock(
+            @RequestParam String symbol,
+            @RequestParam int qty,
+            @RequestParam(required = false) Double price // Added price parameter
+    ) {
+        return placeOrder(symbol, qty, price, "BUY");
+    }
+
+    @GetMapping("/trade/sell")
+    public String sellStock(
+            @RequestParam String symbol,
+            @RequestParam int qty,
+            @RequestParam(required = false) Double price // Added price parameter
+    ) {
+        return placeOrder(symbol, qty, price, "SELL");
     }
 }

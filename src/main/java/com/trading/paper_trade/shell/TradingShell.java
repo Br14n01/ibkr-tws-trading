@@ -6,11 +6,7 @@ import com.trading.paper_trade.model.AccountSummary;
 import com.trading.paper_trade.portfolio.PortfolioService;
 import com.trading.paper_trade.market.MarketData;
 import com.trading.paper_trade.market.HistoryService;
-
-import com.ib.client.Contract;
-import com.ib.client.Order;
-import com.ib.client.Decimal;
-import org.springframework.beans.factory.annotation.Autowired;
+import com.trading.paper_trade.order.OrderService;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.shell.standard.ShellComponent;
 import org.springframework.shell.standard.ShellMethod;
@@ -18,6 +14,7 @@ import org.springframework.shell.standard.ShellOption;
 
 import org.jline.terminal.Terminal;
 
+import java.util.List;
 import java.util.Map;
 
 @ShellComponent
@@ -28,17 +25,20 @@ public class TradingShell {
     private final PortfolioService portfolioService;
     private final MarketData marketDataService;
     private final HistoryService historyService;
+    private final OrderService orderService;
 
     public TradingShell(Terminal terminal,
                         PortfolioService portfolioService,
                         @Lazy IBKRClient ibkrClient,
                         MarketData marketDataService,
-                        HistoryService historyService) {
+                        HistoryService historyService,
+                        OrderService orderService) {
         this.terminal = terminal;
         this.portfolioService = portfolioService;
         this.ibkrClient = ibkrClient;
         this.marketDataService = marketDataService;
         this.historyService = historyService;
+        this.orderService = orderService;
     }
 
     @ShellMethod(key = "status", value = "Check connection status")
@@ -87,61 +87,74 @@ public class TradingShell {
         terminal.flush();
     }
 
+    @ShellMethod(key = "orders", value = "View all open orders")
+    public void viewOrders() {
+        if (!ibkrClient.getClient().isConnected()) {
+            terminal.writer().println("Error: TWS not connected.");
+            terminal.flush();
+            return;
+        }
+
+        List<OrderService.OpenOrderResult> orders = orderService.fetchOpenOrders();
+        terminal.writer().println();
+        terminal.writer().println("\u001B[1m=== OPEN ORDERS ===\u001B[0m");
+
+        if (orders.isEmpty()) {
+            terminal.writer().println("No open orders.");
+            terminal.writer().println("===================\n");
+            terminal.flush();
+            return;
+        }
+
+        terminal.writer().printf("%-8s | %-8s | %-8s | %-6s | %-6s | %-8s | %-10s | %-12s | %-7s | %-8s%n",
+                "OrderId", "Symbol", "Type", "Side", "Qty", "LmtPx", "Status", "Exchange", "SecType", "Account");
+        orders.forEach(o -> terminal.writer().printf(
+                "%-8d | %-8s | %-8s | %-6s | %-6s | %-8s | %-10s | %-12s | %-7s | %-8s%n",
+                o.orderId(),
+                dash(o.symbol()),
+                dash(o.orderType()),
+                dash(o.action()),
+                dash(o.quantity()),
+                formatPrice(o.lmtPrice()),
+                dash(o.status()),
+                dash(o.exchange()),
+                dash(o.secType()),
+                dash(o.account())
+        ));
+        terminal.writer().println("===================\n");
+        terminal.flush();
+    }
+
     @ShellMethod(key = "buy", value = "Place a buy order")
-    public String buy(String symbol, int qty, @ShellOption(defaultValue = ShellOption.NULL) Double price) {
-        return placeOrder(symbol, qty, price, "BUY");
+    public void buy(String symbol, int qty, @ShellOption(defaultValue = ShellOption.NULL) Double price) {
+        OrderService.PlaceOrderResult result = orderService.placeOrder(symbol, qty, price, "BUY");
+        terminal.writer().println(result.message());
+        terminal.flush();
     }
 
     @ShellMethod(key = "sell", value = "Place a sell order")
-    public String sell(String symbol, int qty, @ShellOption(defaultValue = ShellOption.NULL) Double price) {
-        return placeOrder(symbol, qty, price, "SELL");
+    public void sell(String symbol, int qty, @ShellOption(defaultValue = ShellOption.NULL) Double price) {
+        OrderService.PlaceOrderResult result = orderService.placeOrder(symbol, qty, price, "SELL");
+        terminal.writer().println(result.message());
+        terminal.flush();
     }
 
-    private String placeOrder(String symbol, int qty, Double price, String action) {
-        if (!ibkrClient.getClient().isConnected()) {
-            return "Error: TWS is not connected!";
-        }
-
-        Contract contract = new Contract();
-        contract.symbol(symbol.toUpperCase());
-        contract.secType("STK");
-        contract.currency("USD");
-        contract.exchange("SMART");
-
-        Order order = new Order();
-        order.action(action); // Set to "BUY" or "SELL"
-        order.totalQuantity(Decimal.get(qty));
-
-        if (price != null) {
-            order.orderType("LMT");
-            order.lmtPrice(price);
-        } else {
-            order.orderType("MKT");
-        }
-
-        int id = ibkrClient.getNextOrderId();
-        ibkrClient.getClient().placeOrder(id, contract, order);
-
-        String priceType = (price != null ? " @ $" + price : " (Market)");
-        return "Order " + id + " sent: " + action + " " + qty + " " + symbol + priceType;
-    }
-
-    @ShellMethod(key = "watch", value = "Subscribe to delayed market data")
-    public String watch(String symbol) {
-        ibkrClient.watchStock(symbol);
-        return "Requesting data...";
-    }
-
-    @ShellMethod(key = "price", value = "Check current price of a watched stock")
+    @ShellMethod(key = "market", value = "Subscribe (once) and show last price when available")
     public String price(String symbol) {
-        Double p = marketDataService.getPrice(symbol);
+        if (!ibkrClient.getClient().isConnected()) {
+            return "Error: TWS not connected.";
+        }
+
+        double p = marketDataService.getPrice(symbol);
         if (p == 0.0) {
-            return "No data for " + symbol.toUpperCase() + " yet. (Wait for 15-min delayed stream)";
+            return "No last price yet for "
+                    + symbol.toUpperCase()
+                    + "; subscription requested—wait briefly for delayed data (typically ~15 min behind).";
         }
         return symbol.toUpperCase() + " Last Price: $" + p;
     }
 
-    @ShellMethod(key = "historical", value = "Get OHLCV")
+    @ShellMethod(key = "hist", value = "Get OHLCV")
     public String getHistory(String symbol) {
         if (!ibkrClient.getClient().isConnected()) {
             return "Error: TWS not connected.";
@@ -149,5 +162,16 @@ public class TradingShell {
 
         historyService.fetch(symbol);
         return "Fetching last 5 days of history for " + symbol.toUpperCase() + "...";
+    }
+
+    private static String dash(String value) {
+        return (value == null || value.isBlank()) ? "-" : value;
+    }
+
+    private static String formatPrice(Double value) {
+        if (value == null || value.isNaN() || value == 0.0) {
+            return "-";
+        }
+        return String.format("%.4f", value);
     }
 }

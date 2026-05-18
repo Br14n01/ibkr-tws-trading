@@ -50,7 +50,7 @@ public class IBKRClient {
     @PostConstruct
     public void start() {
         if (!client.isConnected()) {
-            client.eConnect("127.0.0.1", 7497, 2);
+            client.eConnect("127.0.0.1", 7497, 3);
             if (client.isConnected()) {
                 System.out.println("Connected to IBKR Gateway.");
                 setConnected(true); // Set our flag to true
@@ -99,26 +99,25 @@ public class IBKRClient {
         client.reqAccountUpdates(true, "");
     }
 
-    public void watchStock(String symbol) {
-        // 1. Create the Contract
+    /**
+     * Sends reqMktData for the symbol and returns request id used by IBKR.
+     * Returns -1 when the client is disconnected or the symbol is invalid.
+     */
+    public int requestMarketData(String symbol) {
+        if (!client.isConnected() || symbol == null || symbol.isBlank()) {
+            return -1;
+        }
+
+        client.reqMarketDataType(3);
+
+        int reqId = nextReqId.getAndIncrement();
         Contract contract = new Contract();
-        contract.symbol(symbol.toUpperCase());
+        contract.symbol(symbol.trim().toUpperCase());
         contract.secType("STK");
         contract.currency("USD");
         contract.exchange("SMART");
 
-        // 2. Switch to Delayed Data Type (ID = 3)
-        // This is global for the session or until switched back
-        client.reqMarketDataType(3);
-
-        // 3. Generate a unique ID for this specific stock subscription
-        int reqId = nextReqId.getAndIncrement();
-        marketDataService.addSubscription(reqId, symbol);
-
-        // 4. Request the data
-        // genericTicklist "" means we want default ticks (Last, Bid, Ask, Volume)
         client.reqMktData(reqId, contract, "", false, false, null);
-
-        System.out.println("[IBKR] Subscription sent for " + symbol + " (ID: " + reqId + ")");
+        return reqId;
     }
 }

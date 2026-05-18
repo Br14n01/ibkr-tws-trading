@@ -5,6 +5,8 @@ import com.trading.paper_trade.model.Position;
 import com.trading.paper_trade.portfolio.PortfolioService;
 import com.trading.paper_trade.market.MarketData;
 import com.trading.paper_trade.market.HistoryService;
+import com.trading.paper_trade.order.OrderService;
+import com.trading.paper_trade.strategy.Indicators;
 
 import com.ib.client.*;
 import com.ib.client.protobuf.*;
@@ -14,9 +16,12 @@ import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Component;
 import org.jline.terminal.Terminal;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 // ... import all other required IB classes
 
 @Component
@@ -30,6 +35,10 @@ public class IBKRListener implements EWrapper {
     private final PortfolioService portfolioService;
     private final MarketData marketDataService;
     private final HistoryService historyService;
+    private final OrderService orderService;
+
+    /** Close prices per historical request ID (append order = oldest → newest). */
+    private final Map<Integer, List<Double>> historicalClosesByReqId = new ConcurrentHashMap<>();
 
 
     public IBKRListener(@Lazy IBKRClient ibkrClient,
@@ -37,13 +46,15 @@ public class IBKRListener implements EWrapper {
                         @Lazy LineReader lineReader,
                         PortfolioService portfolioService,
                         MarketData marketDataService,
-                        @Lazy HistoryService historyService){
+                        @Lazy HistoryService historyService,
+                        @Lazy OrderService orderService){
         this.ibkrClient = ibkrClient;
         this.terminal = terminal;
         this.lineReader = lineReader;
         this.portfolioService = portfolioService;
         this.marketDataService = marketDataService;
         this.historyService = historyService;
+        this.orderService = orderService;
     }
 
     public EReaderSignal getSignal() {
@@ -104,12 +115,12 @@ public class IBKRListener implements EWrapper {
 
     @Override
     public void openOrder(int i, Contract contract, Order order, OrderState orderState) {
-
+        orderService.onOpenOrder(i, contract, order, orderState);
     }
 
     @Override
     public void openOrderEnd() {
-
+        orderService.onOpenOrderEnd();
     }
 
     @Override
@@ -190,10 +201,32 @@ public class IBKRListener implements EWrapper {
     public void receiveFA(int i, String s) {
 
     }
+    /** Formats numeric indicator Optional for stdout (value or "-" if undefined). */
+    private static String formatIndicator(Optional<Double> value) {
+        return value.map(d -> String.format("%.4f", d)).orElse("-");
+    }
 
+    private static void printHistoricalIndicatorsSnapshot(int reqId, List<Double> closes) {
+        System.out.printf(
+                "[Indicators req=%d n=%d] SMA5=%s SMA10=%s SMA20=%s | EMA5=%s EMA10=%s EMA20=%s | RSI14=%s%n",
+                reqId,
+                closes.size(),
+                formatIndicator(Indicators.sma5(closes)),
+                formatIndicator(Indicators.sma10(closes)),
+                formatIndicator(Indicators.sma20(closes)),
+                formatIndicator(Indicators.ema5(closes)),
+                formatIndicator(Indicators.ema10(closes)),
+                formatIndicator(Indicators.ema20(closes)),
+                formatIndicator(Indicators.rsi14(closes))
+        );
+    }
+    
     @Override
     public void historicalData(int reqId, Bar bar) {
         System.out.println("HistoricalData:  " + EWrapperMsgGenerator.historicalData(reqId, bar.time(), bar.open(), bar.high(), bar.low(), bar.close(), bar.volume(), bar.count(), bar.wap()));
+
+        List<Double> closes = historicalClosesByReqId.computeIfAbsent(reqId, ignored -> new ArrayList<>());
+        closes.add(bar.close());
     }
 
     @Override
@@ -383,7 +416,10 @@ public class IBKRListener implements EWrapper {
 
     @Override
     public void historicalDataEnd(int reqId, String start, String end) {
-
+        List<Double> closes = historicalClosesByReqId.remove(reqId);
+        if (closes != null && !closes.isEmpty()) {
+            printHistoricalIndicatorsSnapshot(reqId, closes);
+        }
     }
 
     @Override
