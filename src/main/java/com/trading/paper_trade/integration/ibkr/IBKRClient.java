@@ -50,7 +50,7 @@ public class IBKRClient {
     @PostConstruct
     public void start() {
         if (!client.isConnected()) {
-            client.eConnect("127.0.0.1", 7497, 3);
+            client.eConnect("127.0.0.1", 7497, 1);
             if (client.isConnected()) {
                 System.out.println("Connected to IBKR Gateway.");
                 setConnected(true); // Set our flag to true

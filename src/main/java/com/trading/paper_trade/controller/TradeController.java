@@ -1,49 +1,25 @@
 package com.trading.paper_trade.controller;
 
-import com.ib.client.Contract;
-import com.ib.client.Order;
-import com.ib.client.Decimal;
 import com.trading.paper_trade.integration.ibkr.IBKRClient;
+import com.trading.paper_trade.order.OrderService;
+
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+
+import java.util.List;
 
 @RestController
 public class TradeController {
 
     private final IBKRClient ibkrClient;
+    private final OrderService orderService;
 
-    public TradeController(IBKRClient ibkrClient) {
+    public TradeController(IBKRClient ibkrClient, OrderService orderService) {
         this.ibkrClient = ibkrClient;
-    }
-
-    private String placeOrder(String symbol, int qty, Double price, String action) {
-        if (!ibkrClient.getClient().isConnected()) {
-            return "Error: TWS is not connected!";
-        }
-
-        Contract contract = new Contract();
-        contract.symbol(symbol.toUpperCase());
-        contract.secType("STK");
-        contract.currency("USD");
-        contract.exchange("SMART");
-
-        Order order = new Order();
-        order.action(action); // Set to "BUY" or "SELL"
-        order.totalQuantity(Decimal.get(qty));
-
-        if (price != null) {
-            order.orderType("LMT");
-            order.lmtPrice(price);
-        } else {
-            order.orderType("MKT");
-        }
-
-        int id = ibkrClient.getNextOrderId();
-        ibkrClient.getClient().placeOrder(id, contract, order);
-
-        String priceType = (price != null ? " @ $" + price : " (Market)");
-        return "Order " + id + " sent: " + action + " " + qty + " " + symbol + priceType;
+        this.orderService = orderService;
     }
 
     @GetMapping("/trade/buy")
@@ -52,7 +28,7 @@ public class TradeController {
             @RequestParam int qty,
             @RequestParam(required = false) Double price // Added price parameter
     ) {
-        return placeOrder(symbol, qty, price, "BUY");
+        return orderService.placeOrder(symbol, qty, price, "BUY").message();
     }
 
     @GetMapping("/trade/sell")
@@ -61,6 +37,17 @@ public class TradeController {
             @RequestParam int qty,
             @RequestParam(required = false) Double price // Added price parameter
     ) {
-        return placeOrder(symbol, qty, price, "SELL");
+        return orderService.placeOrder(symbol, qty, price, "SELL").message();
+    }
+
+    /**
+     * Returns all open orders (async IB snapshot via {@link OrderService#fetchOpenOrders()}).
+     */
+    @GetMapping("/trade/orders")
+    public ResponseEntity<List<OrderService.OpenOrderResult>> getOpenOrders() {
+        if (!ibkrClient.getClient().isConnected()) {
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).build();
+        }
+        return ResponseEntity.ok(orderService.fetchOpenOrders());
     }
 }
