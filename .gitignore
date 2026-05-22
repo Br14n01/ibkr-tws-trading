@@ -4,6 +4,12 @@ target/
 !**/src/main/**/target/
 !**/src/test/**/target/
 
+### Runtime artifacts (shell command history) ###
+# Spring Shell writes interactive command history to <app-name>.log in the cwd;
+# this is local usage data and must not be committed.
+paper-trade.log
+/aapl
+
 ### STS ###
 .apt_generated
 .classpath

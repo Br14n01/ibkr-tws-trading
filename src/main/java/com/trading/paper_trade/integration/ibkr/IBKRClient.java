@@ -1,6 +1,7 @@
 package com.trading.paper_trade.integration.ibkr;
 
 import com.trading.paper_trade.market.MarketData;
+import com.trading.paper_trade.config.IbkrProperties;
 
 import com.ib.client.*;
 import jakarta.annotation.PostConstruct;
@@ -16,6 +17,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class IBKRClient {
     private final EClientSocket client;
     private final IBKRListener listener;
+    private final IbkrProperties props;
     private int currentOrderId = -1;
 
     private boolean isConnected = false;
@@ -26,8 +28,9 @@ public class IBKRClient {
 
     private AtomicInteger nextReqId = new AtomicInteger(1000);
 
-    public IBKRClient(IBKRListener listener){
+    public IBKRClient(IBKRListener listener, IbkrProperties props){
         this.listener = listener;
+        this.props = props;
         this.client = new EClientSocket(listener, listener.getSignal());
     }
 
@@ -50,9 +53,10 @@ public class IBKRClient {
     @PostConstruct
     public void start() {
         if (!client.isConnected()) {
-            client.eConnect("127.0.0.1", 7497, 1);
+            client.eConnect(props.host(), props.port(), props.clientId());
             if (client.isConnected()) {
-                System.out.println("Connected to IBKR Gateway.");
+                System.out.println("Connected to IBKR Gateway at " + props.host() + ":" + props.port()
+                        + " (clientId=" + props.clientId() + ").");
                 setConnected(true); // Set our flag to true
                 startReaderThread();
                 subscribeToPortfolioData();

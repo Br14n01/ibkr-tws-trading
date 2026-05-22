@@ -52,6 +52,18 @@ public class OrderService {
     ) {}
 
     public PlaceOrderResult placeOrder(String symbol, int qty, Double price, String action) {
+        // Validate here too: the shell calls this directly and bypasses the
+        // controller's request validation, and we must never forward a bad order to IBKR.
+        if (symbol == null || symbol.isBlank()) {
+            return new PlaceOrderResult(null, qty, price, action, -1, false, "Error: symbol is required.");
+        }
+        if (qty <= 0) {
+            return new PlaceOrderResult(symbol, qty, price, action, -1, false, "Error: quantity must be a positive whole number.");
+        }
+        if (price != null && price <= 0) {
+            return new PlaceOrderResult(symbol, qty, price, action, -1, false, "Error: price must be positive when provided.");
+        }
+
         if (!ibkrClient.getClient().isConnected()) {
             return new PlaceOrderResult(null, qty, price, action, -1, false, "Error: TWS is not connected!");
         }
