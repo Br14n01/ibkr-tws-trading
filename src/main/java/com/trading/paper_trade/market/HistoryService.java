@@ -34,7 +34,9 @@ public class HistoryService {
         contract.currency("USD");
         contract.exchange("SMART");
 
-        int reqId = ibkrClient.getNextOrderId();
+        // Historical data is a data request, not an order: draw from the request-id space
+        // so it can never collide with (or burn) a TWS order id.
+        int reqId = ibkrClient.getNextRequestId();
 
         // EWrapper.historicalData
         ibkrClient.getClient().reqHistoricalData(

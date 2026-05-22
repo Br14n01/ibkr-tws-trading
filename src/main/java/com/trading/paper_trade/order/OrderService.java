@@ -10,8 +10,11 @@ import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.ReentrantLock;
 
 @Service
 public class OrderService {
@@ -21,6 +24,12 @@ public class OrderService {
     private final Object openOrdersLock = new Object();
     private final List<OpenOrderResult> openOrdersBuffer = new ArrayList<>();
     private volatile CountDownLatch openOrdersLatch;
+
+    /** Serializes reqAllOpenOrders: its callbacks carry no request id, so only one may be in flight. */
+    private final ReentrantLock openOrdersRequestLock = new ReentrantLock();
+
+    /** Latest TWS status per order id, updated asynchronously via {@link #onOrderStatus}. */
+    private final Map<Integer, String> lastStatusByOrderId = new ConcurrentHashMap<>();
 
     public OrderService(@Lazy IBKRClient ibkrClient){
         this.ibkrClient = ibkrClient;
@@ -87,11 +96,31 @@ public class OrderService {
         }
 
         int id = ibkrClient.getNextOrderId();
+        if (id < 0) {
+            return new PlaceOrderResult(normalizedSymbol, qty, price, action, -1, false,
+                    "Error: no valid order id from TWS yet. Wait for the connection to finish initializing.");
+        }
+
+        lastStatusByOrderId.put(id, "PendingSubmit");
         ibkrClient.getClient().placeOrder(id, contract, order);
 
-        String message = "Order " + id + " sent: " + action + " " + qty + " " + normalizedSymbol
-                + (price != null ? " @ $" + price : " (Market)");
+        // NOTE: placeOrder is fire-and-forget — this confirms the order was SUBMITTED, not filled
+        // or accepted. The real outcome arrives asynchronously via orderStatus()/error().
+        String message = "Order " + id + " submitted (pending confirmation): " + action + " " + qty + " "
+                + normalizedSymbol + (price != null ? " @ $" + price : " (Market)");
         return new PlaceOrderResult(normalizedSymbol, qty, price, action, id, true, message);
+    }
+
+    /** Called from the IB listener's orderStatus callback. Records the latest status per order. */
+    public void onOrderStatus(int orderId, String status) {
+        if (status != null && !status.isBlank()) {
+            lastStatusByOrderId.put(orderId, status);
+        }
+    }
+
+    /** Last known status for an order id, or {@code "UNKNOWN"} if none has been received. */
+    public String getLastStatus(int orderId) {
+        return lastStatusByOrderId.getOrDefault(orderId, "UNKNOWN");
     }
 
     public List<OpenOrderResult> fetchOpenOrders() {
@@ -99,25 +128,31 @@ public class OrderService {
             return List.of();
         }
 
-        CountDownLatch latch;
-        synchronized (openOrdersLock) {
-            openOrdersBuffer.clear();
-            latch = new CountDownLatch(1);
-            openOrdersLatch = latch;
-        }
-
-        ibkrClient.getClient().reqAllOpenOrders();
-
+        // The IB openOrder/openOrderEnd callbacks carry no request id, so two concurrent
+        // reqAllOpenOrders calls would interleave into the same buffer. Serialize them so
+        // each caller gets a clean, consistent snapshot.
+        openOrdersRequestLock.lock();
         try {
-            latch.await(OPEN_ORDERS_TIMEOUT_MS, TimeUnit.MILLISECONDS);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        } finally {
-            openOrdersLatch = null;
-        }
+            CountDownLatch latch = new CountDownLatch(1);
+            synchronized (openOrdersLock) {
+                openOrdersBuffer.clear();
+                openOrdersLatch = latch;
+            }
 
-        synchronized (openOrdersLock) {
-            return List.copyOf(openOrdersBuffer);
+            ibkrClient.getClient().reqAllOpenOrders();
+
+            try {
+                latch.await(OPEN_ORDERS_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+
+            synchronized (openOrdersLock) {
+                openOrdersLatch = null;
+                return List.copyOf(openOrdersBuffer);
+            }
+        } finally {
+            openOrdersRequestLock.unlock();
         }
     }
 

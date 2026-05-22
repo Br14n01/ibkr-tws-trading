@@ -64,9 +64,12 @@ public class IBKRListener implements EWrapper {
     // IMPORTANT: This is the method the Client calls to set the ID
     @Override
     public void nextValidId(int orderId) {
-        // We will link this back to the Client later
+        // nextValidId is TWS' "connection is ready" signal. Seed the order id, then kick off
+        // portfolio subscriptions here (rather than synchronously during connect, before the
+        // reader thread is processing messages). subscribeToPortfolioData() is idempotent.
         System.out.println("Next Valid ID: " + orderId);
         ibkrClient.setNextOrderId(orderId);
+        ibkrClient.subscribeToPortfolioData();
     }
 
     // You must implement all EWrapper methods (even if empty)
@@ -109,8 +112,17 @@ public class IBKRListener implements EWrapper {
     }
 
     @Override
-    public void orderStatus(int i, String s, Decimal decimal, Decimal decimal1, double v, long l, int i1, double v1, int i2, String s1, double v2) {
-
+    public void orderStatus(int orderId, String status, Decimal filled, Decimal remaining,
+                            double avgFillPrice, long permId, int parentId, double lastFillPrice,
+                            int clientId, String whyHeld, double mktCapPrice) {
+        orderService.onOrderStatus(orderId, status);
+        printAbovePrompt(String.format(
+                "\033[36m[Order %d] %s — filled %s, remaining %s%s\033[0m",
+                orderId,
+                status,
+                decimalText(filled),
+                decimalText(remaining),
+                avgFillPrice > 0 ? String.format(" @ avg $%.2f", avgFillPrice) : ""));
     }
 
     @Override
@@ -201,6 +213,38 @@ public class IBKRListener implements EWrapper {
     public void receiveFA(int i, String s) {
 
     }
+    /**
+     * Prints a line above the interactive shell prompt without leaving the prompt garbled.
+     * Safe to call from IB callback threads and before the line reader is actively reading.
+     */
+    private void printAbovePrompt(String ansiLine) {
+        try {
+            terminal.writer().print("\r\033[2K");   // clear the current prompt line
+            terminal.writer().println(ansiLine);
+            try {
+                lineReader.callWidget(LineReader.REDRAW_LINE);
+                lineReader.callWidget(LineReader.REDISPLAY);
+            } catch (RuntimeException notReading) {
+                // line reader isn't in an active read (e.g. during startup) — line is already printed
+            }
+            terminal.flush();
+        } catch (Exception ex) {
+            System.err.println(ansiLine);
+        }
+    }
+
+    /** Renders an IB {@link Decimal} as a plain number, tolerant of nulls / unset values. */
+    private static String decimalText(Decimal d) {
+        if (d == null) {
+            return "0";
+        }
+        try {
+            return d.value().stripTrailingZeros().toPlainString();
+        } catch (RuntimeException e) {
+            return d.toString();
+        }
+    }
+
     /** Formats numeric indicator Optional for stdout (value or "-" if undefined). */
     private static String formatIndicator(Optional<Double> value) {
         return value.map(d -> String.format("%.4f", d)).orElse("-");
@@ -333,35 +377,30 @@ public class IBKRListener implements EWrapper {
 
     @Override
     public void error(Exception e) {
-
+        // Previously swallowed silently. Surface low-level transport/parse exceptions.
+        printAbovePrompt("\033[31m[IBKR] Connection error: " + e.getMessage() + "\033[0m");
     }
 
     @Override
     public void error(String s) {
-
+        // Previously swallowed silently.
+        printAbovePrompt("\033[31m[IBKR] " + s + "\033[0m");
     }
 
     @Override
     public void error(int id, long l, int errorCode, String errorMsg, String advancedOrderRejectionJson) {
-        // 1. 2104, 2106, 2158 are often just "Data farm connection is OK" status messages
+        // 2104, 2106, 2158 are just "Data farm connection is OK" status messages.
         if (errorCode == 2104 || errorCode == 2106 || errorCode == 2158) return;
 
-        // 1. Clear the current line where the "old" prompt was sitting
-        terminal.writer().print("\r\033[2K");
-
-        // 2. Print the IBKR message
-        terminal.writer().println("\033[33m[IBKR] " + errorMsg + "\033[0m");
-
-        // 3. Force a new prompt to appear immediately
-        lineReader.callWidget(LineReader.REDRAW_LINE);
-        lineReader.callWidget(LineReader.REDISPLAY);
-
-        terminal.flush();
+        printAbovePrompt("\033[33m[IBKR] (" + errorCode + ") " + errorMsg
+                + (id >= 0 ? " [id=" + id + "]" : "") + "\033[0m");
     }
 
     @Override
     public void connectionClosed() {
-
+        // Previously empty, so a dropped connection left stale subscription state behind.
+        ibkrClient.onConnectionClosed();
+        printAbovePrompt("\033[31m[IBKR] Connection to TWS closed.\033[0m");
     }
 
     @Override
