@@ -1,8 +1,11 @@
 HELP.md
 target/
-.mvn/wrapper/maven-wrapper.jar
+**/.mvn/wrapper/maven-wrapper.jar
 !**/src/main/**/target/
 !**/src/test/**/target/
+
+### OS ###
+.DS_Store
 
 ### Runtime artifacts (shell command history) ###
 # Spring Shell writes interactive command history to <app-name>.log in the cwd;
