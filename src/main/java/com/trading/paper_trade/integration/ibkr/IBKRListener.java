@@ -115,14 +115,19 @@ public class IBKRListener implements EWrapper {
     public void orderStatus(int orderId, String status, Decimal filled, Decimal remaining,
                             double avgFillPrice, long permId, int parentId, double lastFillPrice,
                             int clientId, String whyHeld, double mktCapPrice) {
-        orderService.onOrderStatus(orderId, status);
-        printAbovePrompt(String.format(
-                "\033[36m[Order %d] %s — filled %s, remaining %s%s\033[0m",
-                orderId,
-                status,
-                decimalText(filled),
-                decimalText(remaining),
-                avgFillPrice > 0 ? String.format(" @ avg $%.2f", avgFillPrice) : ""));
+        String filledText = decimalText(filled);
+        String remainingText = decimalText(remaining);
+
+        // TWS re-emits the same orderStatus on every internal refresh; only print real changes.
+        if (orderService.onOrderStatus(orderId, status, filledText, remainingText)) {
+            printAbovePrompt(String.format(
+                    "\033[36m[Order %d] %s — filled %s, remaining %s%s\033[0m",
+                    orderId,
+                    status,
+                    filledText,
+                    remainingText,
+                    avgFillPrice > 0 ? String.format(" @ avg $%.2f", avgFillPrice) : ""));
+        }
     }
 
     @Override

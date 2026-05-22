@@ -48,6 +48,11 @@ public class TradeController {
         return orderService.placeOrder(symbol, qty, price, "SELL").message();
     }
 
+    @PostMapping("/trade/cancel")
+    public String cancelOrder(@RequestParam @Min(0) int orderId) {
+        return orderService.cancelOrder(orderId).message();
+    }
+
     /**
      * Returns all open orders (async IB snapshot via {@link OrderService#fetchOpenOrders()}).
      */

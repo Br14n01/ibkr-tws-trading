@@ -139,6 +139,13 @@ public class TradingShell {
         terminal.flush();
     }
 
+    @ShellMethod(key = "cancel", value = "Cancel an open order by id")
+    public void cancel(int orderId) {
+        OrderService.CancelOrderResult result = orderService.cancelOrder(orderId);
+        terminal.writer().println(result.message());
+        terminal.flush();
+    }
+
     @ShellMethod(key = "market", value = "Subscribe (once) and show last price when available")
     public String price(String symbol) {
         if (!ibkrClient.getClient().isConnected()) {

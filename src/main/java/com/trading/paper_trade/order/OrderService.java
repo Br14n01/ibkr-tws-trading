@@ -3,6 +3,7 @@ package com.trading.paper_trade.order;
 import com.ib.client.Contract;
 import com.ib.client.Decimal;
 import com.ib.client.Order;
+import com.ib.client.OrderCancel;
 import com.ib.client.OrderState;
 import com.trading.paper_trade.integration.ibkr.IBKRClient;
 import org.springframework.context.annotation.Lazy;
@@ -28,8 +29,11 @@ public class OrderService {
     /** Serializes reqAllOpenOrders: its callbacks carry no request id, so only one may be in flight. */
     private final ReentrantLock openOrdersRequestLock = new ReentrantLock();
 
-    /** Latest TWS status per order id, updated asynchronously via {@link #onOrderStatus}. */
+    /** Latest bare TWS status word per order id (for {@link #getLastStatus}). */
     private final Map<Integer, String> lastStatusByOrderId = new ConcurrentHashMap<>();
+
+    /** Full status snapshot per order id, used to suppress TWS' duplicate orderStatus callbacks. */
+    private final Map<Integer, String> lastSnapshotByOrderId = new ConcurrentHashMap<>();
 
     public OrderService(@Lazy IBKRClient ibkrClient){
         this.ibkrClient = ibkrClient;
@@ -40,6 +44,12 @@ public class OrderService {
             int quantity,
             Double price,
             String action,
+            int orderId,
+            boolean success,
+            String message
+    ) {}
+
+    public record CancelOrderResult(
             int orderId,
             boolean success,
             String message
@@ -111,11 +121,35 @@ public class OrderService {
         return new PlaceOrderResult(normalizedSymbol, qty, price, action, id, true, message);
     }
 
-    /** Called from the IB listener's orderStatus callback. Records the latest status per order. */
-    public void onOrderStatus(int orderId, String status) {
+    public CancelOrderResult cancelOrder(int orderId) {
+        if (orderId < 0) {
+            return new CancelOrderResult(orderId, false, "Error: orderId must be a non-negative integer.");
+        }
+        if (!ibkrClient.getClient().isConnected()) {
+            return new CancelOrderResult(orderId, false, "Error: TWS is not connected!");
+        }
+
+        // Fire-and-forget like placeOrder: the real outcome (Cancelled, or an error such as
+        // "order not found"/"cannot cancel filled order") arrives async via orderStatus()/error().
+        ibkrClient.getClient().cancelOrder(orderId, new OrderCancel());
+        lastStatusByOrderId.put(orderId, "PendingCancel");
+
+        return new CancelOrderResult(orderId, true,
+                "Cancel requested for order " + orderId + " (pending confirmation).");
+    }
+
+    /**
+     * Records an orderStatus callback. Returns {@code true} only when the snapshot
+     * (status + fills) actually changed, so callers can suppress the duplicate, unchanged
+     * orderStatus callbacks that TWS re-emits on every internal refresh.
+     */
+    public boolean onOrderStatus(int orderId, String status, String filled, String remaining) {
         if (status != null && !status.isBlank()) {
             lastStatusByOrderId.put(orderId, status);
         }
+        String snapshot = status + "|" + filled + "|" + remaining;
+        String previous = lastSnapshotByOrderId.put(orderId, snapshot);
+        return !snapshot.equals(previous);
     }
 
     /** Last known status for an order id, or {@code "UNKNOWN"} if none has been received. */
